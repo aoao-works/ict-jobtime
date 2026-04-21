@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ICTシフト人数</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="data.js"></script>
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 15px; background: #f0f2f5; color: #333; margin: 0; }
+    h1 { font-size: 20px; text-align: center; margin-bottom: 5px; color: #444; }
+    .last-updated { text-align: center; font-size: 11px; color: #888; margin-bottom: 20px; }
+    .list-container { display: flex; flex-direction: column; gap: 10px; padding-bottom: 50px; }
+    .card {
+      padding: 18px 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+      display: flex; justify-content: space-between; align-items: center;
+      background-color: #ffffff; touch-action: manipulation; transition: background-color 0.2s;
+    }
+    .card:active { background-color: #f0f0f0; }
+    .card.holiday { background-color: #e4e6eb; color: #606770; box-shadow: none; }
+    .card.alert { background-color: #ffe5e5; color: #d32f2f; border: 1px solid #ffcccc; }
+    .card-date { font-size: 18px; font-weight: bold; }
+    .card-dow { font-size: 12px; font-weight: normal; opacity: 0.7; }
+    .card-right { font-size: 15px; font-weight: bold; }
+    
+    .modal {
+      display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px);
+    }
+    .modal-content {
+      background: #fff; width: 92%; max-width: 500px; padding: 20px 15px; border-radius: 16px; position: relative;
+    }
+    .close-btn { position: absolute; top: 12px; right: 15px; font-size: 28px; color: #aaa; cursor: pointer; }
+    #chart-wrapper { height: 280px; width: 100%; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>【5月】ICTシフト人数</h1>
+  <div id="lastUpdated" class="last-updated">更新情報を読み込み中...</div>
+
+  <div id="day-list" class="list-container"></div>
+
+  <div id="chart-modal" class="modal" onclick="closeChart()">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <span class="close-btn" onclick="closeChart()">×</span>
+      <div id="modal-title" style="font-weight:bold; font-size:16px;"></div>
+      <div id="chart-wrapper">
+        <canvas id="shiftChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let chartInstance = null;
+
+    function timeToMins(t) {
+      if (!t) return 0;
+      const [h, m] = t.split(':').map(Number);
+      return h * 60 + m;
+    }
+
+    function getCountsForSlots(shifts, slots) {
+      return slots.map(slot => {
+        const slotMins = timeToMins(slot);
+        let count = 0;
+        shifts.forEach(s => {
+          if (timeToMins(s.start) <= slotMins && slotMins < timeToMins(s.end)) count++;
+        });
+        return count;
+      });
+    }
+
+    function init() {
+      if (typeof SITE_DATA === 'undefined') {
+        document.getElementById('day-list').innerHTML = '<p style="padding:20px; text-align:center;">data.js が見つからないか、正しくありません。</p>';
+        return;
+      }
+
+      document.getElementById('lastUpdated').textContent = `最終更新: ${SITE_DATA.lastUpdated}`;
+      const listContainer = document.getElementById('day-list');
+      
+      const weekdaySlots = ['07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '14:30'];
+      const saturdaySlots = ['07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30'];
+
+      // ★修正ポイント：日付（キー）を数値として昇順ソートする
+      const days = Object.keys(SITE_DATA.dayTypes).sort((a, b) => Number(a) - Number(b));
+
+      days.forEach(day => {
+        const type = SITE_DATA.dayTypes[day];
+        const shifts = SITE_DATA.shifts[day] || [];
+        let cardClass = '', rightText = '', dayOfWeekText = '';
+
+        if (type === 'holiday') {
+          cardClass = 'holiday';
+          dayOfWeekText = '(日/祝)';
+          rightText = '公休/法休';
+        } else {
+          dayOfWeekText = type === 'saturday' ? '(土)' : '(平日)';
+          const targetSlots = type === 'saturday' ? saturdaySlots : weekdaySlots;
+          const counts = getCountsForSlots(shifts, targetSlots);
+          const minWorkers = Math.min(...counts);
+          rightText = `最少人数: ${minWorkers}人`;
+          if (minWorkers === 0) cardClass = 'alert';
+        }
+
+        const card = document.createElement('div');
+        card.className = `card ${cardClass}`;
+        card.innerHTML = `
+          <div><span class="card-date">${day}日</span> <span class="card-dow">${dayOfWeekText}</span></div>
+          <div class="card-right">${rightText}</div>
+        `;
+        card.onclick = () => openChart(day, dayOfWeekText);
+        listContainer.appendChild(card);
+      });
+    }
+
+    function openChart(day, dowText) {
+      document.getElementById('modal-title').textContent = `${day}日 ${dowText} の推移`;
+      document.getElementById('chart-modal').style.display = 'flex';
+      const shifts = SITE_DATA.shifts[day] || [];
+      const labels = [];
+      for (let h = 7; h <= 16; h++) {
+        labels.push(h.toString().padStart(2, '0') + ':00');
+        if (h < 16) labels.push(h.toString().padStart(2, '0') + ':30');
+      }
+      const dataPoints = getCountsForSlots(shifts, labels);
+
+      if (chartInstance) chartInstance.destroy();
+      const ctx = document.getElementById('shiftChart').getContext('2d');
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{ data: dataPoints, borderColor: '#007aff', backgroundColor: 'rgba(0,122,255,0.1)', fill: true, stepped: true, borderWidth: 2 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+      });
+    }
+
+    function closeChart() { document.getElementById('chart-modal').style.display = 'none'; }
+    window.onload = init;
+  </script>
+</body>
+</html>

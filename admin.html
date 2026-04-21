@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>【管理者用】シフトデータ変換ツール</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f4f4f9; color: #333; }
+    .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    textarea { width: 100%; height: 250px; margin-top: 10px; font-family: monospace; padding: 10px; box-sizing: border-box; border: 1px solid #ddd; outline: none; }
+    textarea:focus { border-color: #007aff; }
+    
+    /* ボタンの基本スタイルとアニメーション設定 */
+    button { 
+      padding: 14px 24px; font-size: 16px; background: #007aff; color: white; 
+      border: none; border-radius: 6px; cursor: pointer; margin-top: 15px; 
+      width: 100%; font-weight: bold; transition: all 0.3s ease; 
+    }
+    button:active { transform: scale(0.98); }
+    
+    .step { margin-bottom: 25px; }
+    h2 { font-size: 18px; border-left: 4px solid #007aff; padding-left: 10px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="step">
+      <h2>1. ジョブカンのHTMLを選択</h2>
+      <input type="file" id="htmlUpload" accept=".html">
+    </div>
+    
+    <div class="step">
+      <h2>2. 生成されたデータをコピー（名前は自動削除されます）</h2>
+      <p style="font-size: 14px; color: #666; margin-top: 0;">下のボタンを押して、<code>data.js</code> の中身をすべて書き換えてください。</p>
+      <textarea id="outputArea" readonly placeholder="ファイルを選択するとここにデータが表示されます..."></textarea>
+      <button id="copyBtn" onclick="copyToClipboard()">データをコピーして data.js に貼り付ける</button>
+    </div>
+  </div>
+
+  <script>
+    // HTMLファイル読み込み時の処理
+    document.getElementById('htmlUpload').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) { parseJobcanHTML(e.target.result); };
+      reader.readAsText(file);
+    });
+
+    // データのパースとJSON化
+    function parseJobcanHTML(htmlString) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      let shiftDataByDay = {}; 
+      let dayTypes = {};
+
+      const dayHeaders = Array.from(doc.querySelectorAll('th.day')).map(th => th.textContent.trim());
+      dayHeaders.forEach(day => { shiftDataByDay[day] = []; });
+
+      const rows = doc.querySelectorAll('table.note tr');
+      if(rows.length >= 2) {
+        const dowThs = rows[1].querySelectorAll('th');
+        dayHeaders.forEach((day, index) => {
+          const th = dowThs[index + 1];
+          const html = th.innerHTML;
+          if (html.includes('red') || html.includes('日')) { dayTypes[day] = 'holiday'; } 
+          else if (html.includes('blue') || html.includes('土')) { dayTypes[day] = 'saturday'; } 
+          else { dayTypes[day] = 'weekday'; }
+        });
+      }
+
+      rows.forEach(row => {
+        const nameTh = row.querySelector('th.first');
+        if (nameTh && row.querySelectorAll('td.applying.day').length > 0 && !nameTh.textContent.includes('2026年')) {
+          const tds = row.querySelectorAll('td.applying.day');
+          tds.forEach((td, index) => {
+            const span = td.querySelector('span');
+            if (span) {
+              const times = span.innerHTML.match(/\d{1,2}:\d{2}/g);
+              if (times && times.length >= 2) {
+                const day = dayHeaders[index];
+                if (day && shiftDataByDay[day]) {
+                  // 個人情報を除外し、時間のみを抽出
+                  shiftDataByDay[day].push({ start: times[0], end: times[1] });
+                }
+              }
+            }
+          });
+        }
+      });
+
+      const now = new Date();
+      const lastUpdated = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      const outputData = {
+        lastUpdated: lastUpdated,
+        dayTypes: dayTypes,
+        shifts: shiftDataByDay
+      };
+
+      document.getElementById('outputArea').value = "const SITE_DATA = " + JSON.stringify(outputData, null, 2) + ";";
+      
+      // 新しいファイルを読み込んだ際、ボタンの状態をリセットする
+      resetButton();
+    }
+
+    // ボタンの状態を元に戻す関数
+    function resetButton() {
+      const btn = document.getElementById('copyBtn');
+      btn.textContent = "データをコピーして data.js に貼り付ける";
+      btn.style.background = "#007aff";
+    }
+
+    // クリップボードへコピーする処理（アラートなし）
+    async function copyToClipboard() {
+      const textarea = document.getElementById('outputArea');
+      const btn = document.getElementById('copyBtn');
+      
+      // データが空の場合の警告表示
+      if (!textarea.value) {
+        btn.textContent = "データがありません";
+        btn.style.background = "#ff3b30"; // 赤色
+        setTimeout(resetButton, 2000);
+        return;
+      }
+
+      try {
+        // モダンなクリップボードAPIを使用してコピー
+        await navigator.clipboard.writeText(textarea.value);
+        showSuccess(btn);
+      } catch (err) {
+        // APIがブロックされた場合のフォールバック（古いブラウザ等）
+        textarea.select();
+        document.execCommand('copy');
+        showSuccess(btn);
+      }
+    }
+
+    // コピー成功時のボタンUI変化
+    function showSuccess(btn) {
+      btn.textContent = "コピー完了！VSCodeに貼り付けてください";
+      btn.style.background = "#34c759"; // グリーン
+      
+      // 3秒後に元の青色ボタンに戻す
+      setTimeout(resetButton, 3000);
+    }
+  </script>
+</body>
+</html>
