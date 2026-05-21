@@ -1,5 +1,5 @@
 const SITE_DATA = {
-  "lastUpdated": "2026年5月21日 20:01",
+  "lastUpdated": "2026年5月21日 20:07",
   "dayTypes": {
     "10": "weekday",
     "11": "weekday",
@@ -304,6 +304,10 @@ const SITE_DATA = {
       }
     ],
     "03": [
+      {
+        "start": "07:30",
+        "end": "12:00"
+      },
       {
         "start": "11:30",
         "end": "15:30"
